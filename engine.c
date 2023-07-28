@@ -3,12 +3,12 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include <X11/Xutil.h>
-#include <vulkan/vulkan_core.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
 
-#define VK_USE_PLATFORM_XLIB_KHR
 #include <vulkan/vulkan.h>
 
 #define VK_CHECK(expr) do { \
@@ -21,7 +21,7 @@
 
 // Instance, Surface, Physical Device, Queue, Device
 static 
-void base_init(Engine *e, Display *display, Window window) {
+void base_init(Engine *e, SDL_Window *window) {
     {
         // Driver vendor may use this
         VkApplicationInfo app_info = {
@@ -33,10 +33,18 @@ void base_init(Engine *e, Display *display, Window window) {
             .apiVersion = VK_API_VERSION_1_0,
         };
 
-        const char *global_extensions[] = {
-            VK_KHR_SURFACE_EXTENSION_NAME,
-            VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
-        };
+        uint32_t global_extensions_count;
+        SDL_Vulkan_GetInstanceExtensions(window, &global_extensions_count, NULL);
+
+        // Allocate memory to store the extension names
+        const char **global_extensions = malloc(global_extensions_count * sizeof(const char *));
+        if (global_extensions == NULL) {
+            fprintf(stderr, "global_extensions == NULL");
+            exit(1);
+        }
+
+        // Retrieve the Vulkan instance extensions for the SDL window
+        SDL_Vulkan_GetInstanceExtensions(window, &global_extensions_count, global_extensions);
 
         {
             uint32_t layer_count;
@@ -63,22 +71,17 @@ void base_init(Engine *e, Display *display, Window window) {
             .pApplicationInfo = &app_info,
             .enabledLayerCount = sizeof(gloabal_layers) / sizeof(const char *),
             .ppEnabledLayerNames = gloabal_layers,
-            .enabledExtensionCount = sizeof(global_extensions) / sizeof(const char *),
+            .enabledExtensionCount = global_extensions_count,
             .ppEnabledExtensionNames = global_extensions,
         };
 
         VK_CHECK(vkCreateInstance(&instance_ci, NULL, &e->instance));
+
+        free(global_extensions);
     }
 
     {
-        // Create Vulkan surface for X11 window
-        VkXlibSurfaceCreateInfoKHR xlib_surface_ci = {
-            .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
-            .dpy = display,
-            .window = window,
-        };
-
-        VK_CHECK(vkCreateXlibSurfaceKHR(e->instance,  &xlib_surface_ci, NULL, &e->surface));
+        SDL_Vulkan_CreateSurface(window, e->instance, &e->surface);
     }
 
     // TODO: pick device better, may be you want specific one
@@ -778,12 +781,12 @@ void triangle_pipeline_deinit(Engine *e) {
 }
 
 
-void engine_init_xlib(Engine *e, int width, int height, Display *display, Window window) {
+void engine_init_sdl(Engine *e, int width, int height, SDL_Window *window) {
     e->resize_pending = 0;
     e->signaled_width = width;
     e->signaled_height = height;
 
-    base_init(e, display, window);
+    base_init(e, window);
 
     vertex_memory_init(e);
 
@@ -838,14 +841,20 @@ void engine_draw(Engine *e, float cycle) {
     uint32_t swapchain_image_index = -1;
     {
         VkResult result = vkAcquireNextImageKHR(e->device, e->swapchain, UINT64_MAX, e->present_sema, NULL, &swapchain_image_index);
-        // TODO: VK_ERROR_OUT_OF_DATE_KHR
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            fprintf(stderr, "vkAcquireNextImageKHR (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)\n");
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
+            fprintf(stderr, "vkAcquireNextImageKHR (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR)\n");
             exit(1);
         }
         if (result == VK_SUBOPTIMAL_KHR && !e->resize_pending) {
             printf("vkAcquireNextImageKHR VK_SUBOPTIMAL_KHR\n");
             e->resize_pending = 1;
+        }
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            printf("vkAcquireNextImageKHR VK_ERROR_OUT_OF_DATE_KHR\n");
+            e->resize_pending = 1;
+            // TODO avoid recursion
+            engine_draw(e, cycle);
+            return;
         }
     }
 
@@ -955,14 +964,20 @@ void engine_draw(Engine *e, float cycle) {
 
     {
         VkResult result = vkQueuePresentKHR(e->graphics_queue, &present_info);
-        // TODO: VK_ERROR_OUT_OF_DATE_KHR        
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            fprintf(stderr, "vkQueuePresentKHR (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)\n");
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR) {
+            fprintf(stderr, "vkQueuePresentKHR (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR && result != VK_ERROR_OUT_OF_DATE_KHR)\n");
             exit(1);
         }
         if (result == VK_SUBOPTIMAL_KHR && !e->resize_pending) {
             printf("vkQueuePresentKHR VK_SUBOPTIMAL_KHR \n");  
             e->resize_pending = 1;
+        }
+        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+            printf("vkQueuePresentKHR VK_ERROR_OUT_OF_DATE_KHR\n");
+            e->resize_pending = 1;
+            // TODO avoid recursion
+            engine_draw(e, cycle);
+            return;
         }
     }
 }

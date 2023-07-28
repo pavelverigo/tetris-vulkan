@@ -3,10 +3,9 @@
 #include <time.h>
 #include <math.h>
 
-#include "engine.h"
+#include <SDL2/SDL.h>
 
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
+#include "engine.h"
 
 #define WIDTH 600
 #define HEIGHT 600
@@ -47,32 +46,27 @@ int main() {
     // I want to see output before segmentation fault
     setbuf(stdout, NULL);
 
-    Display *display = XOpenDisplay(NULL);
-
-    if (display == NULL) {
-        fprintf(stderr, "Cannot open display\n");
-        exit(1);
+    // Initialize SDL2
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        // Handle initialization failure
+        return -1;
     }
 
-    Window root = DefaultRootWindow(display);
+    SDL_Window* window = SDL_CreateWindow("SDL Event Handling",
+                                          SDL_WINDOWPOS_UNDEFINED,
+                                          SDL_WINDOWPOS_UNDEFINED,
+                                          WIDTH,
+                                          HEIGHT,
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
 
-    // Create an X11 window
-    XSetWindowAttributes attributes;
-    attributes.event_mask = ExposureMask | KeyPressMask | StructureNotifyMask
-                            | PointerMotionMask | EnterWindowMask | LeaveWindowMask;
-
-    Window window = XCreateWindow(display, root, 0, 0, WIDTH, HEIGHT, 1, CopyFromParent,
-                                  InputOutput, CopyFromParent, CWEventMask, &attributes);
-
-    XMapWindow(display, window);
-    XStoreName(display, window, "Vulkan Window");
-
-    Atom WM_PROTOCOLS = XInternAtom(display, "WM_PROTOCOLS", False);
-    Atom WM_DELETE_WINDOW = XInternAtom(display, "WM_DELETE_WINDOW", False);
-    XSetWMProtocols(display, window, &WM_DELETE_WINDOW, 1);
+    if (!window) {
+        // Handle window creation failure
+        SDL_Quit();
+        return -1;
+    }
 
     Engine engine;
-    engine_init_xlib(&engine, WIDTH, HEIGHT, display, window);    
+    engine_init_sdl(&engine, WIDTH, HEIGHT, window);
 
     struct timespec delta_timer, debug_timer;
     clock_gettime(CLOCK_MONOTONIC, &delta_timer);
@@ -99,7 +93,9 @@ int main() {
     int mouse_x = 0;
     int mouse_y = 0;
 
-    char window_title[32];
+    char window_title[64];
+
+    SDL_Event event;
 
     while (running) {
         float delta_ms = diff_time_ms(&delta_timer);
@@ -108,13 +104,9 @@ int main() {
         // printf("Time elapsed: %.2f ms\n", delta_ms);
 
         {
-            XTextProperty title;
             float val = fps_append_and_measure(&counter, 1000.0f / delta_ms);
             snprintf(window_title, sizeof(window_title), "FPS: %.2f", (double) val);
-            char *list[] = {window_title};
-            XStringListToTextProperty(list, 1, &title);
-            XSetWMName(display, window, &title);
-            XFree(title.value);
+            SDL_SetWindowTitle(window, window_title);
         }
 
         // oval distance
@@ -141,34 +133,36 @@ int main() {
             accum_cycle -= 1.0f;
         }
 
-        while (XPending(display) > 0) {
-            XEvent event;
-            XNextEvent(display, &event);
-
-            if (event.type == Expose) {
-                // TODO
-            } else if (event.type == KeyPress) {
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+            case SDL_QUIT:
                 running = 0;
                 break;
-            } else if (event.type == ConfigureNotify) {
-                if (!(width == event.xconfigure.width &&
-                     height == event.xconfigure.height)) {
-                    width = event.xconfigure.width;
-                    height = event.xconfigure.height;
-                    engine_signal_resize(&engine, width, height);
-                }
-            } else if (event.type == ClientMessage) {
-                if (event.xclient.message_type == WM_PROTOCOLS && (Atom)event.xclient.data.l[0] == WM_DELETE_WINDOW) {
+            case SDL_KEYDOWN:
+                if (event.key.keysym.sym == SDLK_ESCAPE) {
                     running = 0;
+                }
+                break;
+            case SDL_MOUSEMOTION:
+                // Handle mouse movement here
+                mouse_x = event.motion.x;
+                mouse_y = event.motion.y;
+                break;
+            case SDL_WINDOWEVENT:
+                switch (event.window.event) {
+                case SDL_WINDOWEVENT_RESIZED:
+                    width = event.window.data1;
+                    height = event.window.data2;
+                    engine_signal_resize(&engine, width, height);
+                    break;
+                case SDL_WINDOWEVENT_ENTER:
+                    mouse_inside = 1;
+                    break;
+                case SDL_WINDOWEVENT_LEAVE:
+                    mouse_inside = 0;
                     break;
                 }
-            } else if (event.type == MotionNotify) {
-                mouse_x = event.xmotion.x;
-                mouse_y = event.xmotion.y;
-            } else if (event.type == EnterNotify) {
-                mouse_inside = 1;
-            } else if (event.type == LeaveNotify) {
-                mouse_inside = 0;
+                break;
             }
         }
 
@@ -186,9 +180,9 @@ int main() {
 
     engine_deinit(&engine);
 
-    // Clean up
-    XDestroyWindow(display, window);
-    XCloseDisplay(display);
+    SDL_DestroyWindow(window);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    SDL_Quit();
 
     return 0;
 }

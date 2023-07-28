@@ -3,14 +3,10 @@
 
 #include <stdlib.h>
 
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <vulkan/vulkan_core.h>
-
-#define VK_USE_PLATFORM_XLIB_KHR
 #include <vulkan/vulkan.h>
 
-// TODO: reorder and comment
+#include <SDL2/SDL.h>
+
 typedef struct Engine {
     // BASE
     VkInstance instance;
@@ -59,7 +55,7 @@ typedef struct Engine {
     VkPipeline triangle_pipeline;
 } Engine;
 
-void engine_init_xlib(Engine *e, int width, int height, Display *display, Window window);
+void engine_init_sdl(Engine *e, int width, int height, SDL_Window *window);
 
 void engine_signal_resize(Engine *e, int width, int height);
 
